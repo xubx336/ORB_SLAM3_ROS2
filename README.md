@@ -159,7 +159,7 @@ class HP60CMultiGrabber(Node):
             depth=5
         )
 
-        # 订阅 RGB 和 Depth Topic
+        # 订阅 RGB 和 Depth Topic，将topic改为自己相机发布的topic
         self.rgb_sub = self.create_subscription(
             Image,
             '/ascamera_hp60c/camera_publisher/rgb0/image',
@@ -242,3 +242,258 @@ System.LoadAtlasFromFile: "Map_TUM1"
 第一次运行时将System.LoadAtlasFromFile:的值设为空（会在运行开始时就加载地图，没有该文件会报错）。运行后会在当前目录下保存Map_TUM1.osa文件。  
 <img width="416" height="320" alt="image" src="https://github.com/user-attachments/assets/3b2374fd-f58d-43ca-ae7e-93cc61aa1c41" />  
 ## ORB_SLAM3_ROS2安装  
+### 安装ORB_SLAM3_ROS2  
+1、安装ros2依赖  
+```
+sudo apt install ros-$ROS_DISTRO-vision-opencv && sudo apt install ros-$ROS_DISTRO-message-filters
+```
+2、新建工作空间  
+```bash
+mkdir -p colcon_ws/src
+cd ~/colcon_ws/src
+git clone https://github.com/zang09/ORB_SLAM3_ROS2.git orbslam3_ros2
+```
+3、修改 CMakeLists.txt，将第 5 行代码里的路径修改为你自己本机 ROS2 site-packages 的路径  
+<img width="864" height="161" alt="image" src="https://github.com/user-attachments/assets/361768bc-3ce3-4693-8b0d-cdfae0abcc0b" />  
+为了对应下面对CMakeModules/FindORB_SLAM3.cmake给出的修改，附上解决了其他保存问题后修改好的CMakeLists.txt  
+```
+cmake_minimum_required(VERSION 3.5)
+project(orbslam3)
+
+set(CMAKE_PREFIX_PATH "/opt/ros/jazzy:$CMAKE_PREFIX_PATH")
+set(ENV{PYTHONPATH} "/opt/ros/jazzy/lib/python3.12/site-packages/")
+
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules)
+
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 14)
+endif()
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(message_filters REQUIRED)
+find_package(Pangolin REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(ORB_SLAM3 REQUIRED)
+
+# 全局 include
+include_directories(
+  ${ORB_SLAM3_INCLUDE_DIRS}
+  ${OpenCV_INCLUDE_DIRS}
+  /opt/ros/jazzy/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include  # utility.hpp
+)
+
+# 宏：添加节点
+macro(add_orb_node target node_srcs)
+  add_executable(${target} ${node_srcs})
+  ament_target_dependencies(${target} rclcpp sensor_msgs cv_bridge Pangolin message_filters)
+  target_include_directories(${target} PRIVATE ${ORB_SLAM3_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/include)    
+  if(DEFINED ORB_SLAM3_LIBRARIES)
+    target_link_libraries(${target} ${ORB_SLAM3_LIBRARIES} ${OpenCV_LIBS})
+  else()
+    target_link_libraries(${target} ${OpenCV_LIBS})
+  endif()
+endmacro()
+
+add_orb_node(mono "src/monocular/mono.cpp;src/monocular/monocular-slam-node.cpp")
+add_orb_node(rgbd "src/rgbd/rgbd.cpp;src/rgbd/rgbd-slam-node.cpp")
+add_orb_node(stereo "src/stereo/stereo.cpp;src/stereo/stereo-slam-node.cpp")
+add_orb_node(stereo-inertial "src/stereo-inertial/stereo-inertial.cpp;src/stereo-inertial/stereo-inertial-node.cpp")
+
+install(TARGETS mono rgbd stereo stereo-inertial
+  DESTINATION lib/${PROJECT_NAME})
+
+ament_package()
+```
+4、修改 CMakeModules/FindORB_SLAM3.cmake，将第 8 行代码里的路径修改为你自己本机安装的 ORB_SLAM3 的路径  
+原版ORB_SLAM3_ROS2中的CMakeModules/FindORB_SLAM3.cmake链接的ORB_SLAM3中只链接了在ORB_SLAM3/Thirdparty/ 下的DBoW2和g2o，没有链接Sophus。避免重复安装在CMakeModules/FindORB_SLAM3.cmake中加入Sophus库的链接。下面是修改之后的CMakeModules/FindORB_SLAM3.cmake将路径改为本机路径之后可直接替换  
+```
+# FindORB_SLAM3.cmake - robust finder for ORB_SLAM3 and its thirdparty includes/libs
+
+# 1) Try to get user provided ORB_SLAM3_ROOT_DIR first (cmake -D ORB_SLAM3_ROOT_DIR=...)
+if(NOT DEFINED ORB_SLAM3_ROOT_DIR)
+  # 2) Then try environment HOME
+  if(DEFINED ENV{ORB_SLAM3_ROOT_DIR})
+    set(ORB_SLAM3_ROOT_DIR "$ENV{ORB_SLAM3_ROOT_DIR}")
+  else()
+    set(ORB_SLAM3_ROOT_DIR "$ENV{HOME}/ORB_SLAM3")
+  endif()
+endif()
+
+# Normalize (remove quotes if any)
+string(REGEX REPLACE "^\"|\"$" "" ORB_SLAM3_ROOT_DIR "${ORB_SLAM3_ROOT_DIR}")
+
+# Fallback absolute path if user/home not correct
+if(NOT EXISTS "${ORB_SLAM3_ROOT_DIR}/include/System.h")
+  if(EXISTS "/home/myuser/ORB_SLAM3/include/System.h")
+    set(ORB_SLAM3_ROOT_DIR "/home/myuser/ORB_SLAM3")
+  endif()
+endif()
+
+# Find main include and lib
+find_path(ORB_SLAM3_INCLUDE_DIR NAMES System.h
+          PATHS ${ORB_SLAM3_ROOT_DIR}/include NO_DEFAULT_PATH)
+find_library(ORB_SLAM3_LIBRARY NAMES ORB_SLAM3 libORB_SLAM3
+             PATHS ${ORB_SLAM3_ROOT_DIR}/lib NO_DEFAULT_PATH)
+
+# DBoW2 (builtin)
+find_path(DBoW2_INCLUDE_DIR NAMES Thirdparty/DBoW2/DBoW2/BowVector.h
+          PATHS ${ORB_SLAM3_ROOT_DIR} NO_DEFAULT_PATH)
+find_library(DBoW2_LIBRARY NAMES DBoW2
+             PATHS ${ORB_SLAM3_ROOT_DIR}/Thirdparty/DBoW2/lib NO_DEFAULT_PATH)
+
+# g2o (builtin)
+find_library(g2o_LIBRARY NAMES g2o
+             PATHS ${ORB_SLAM3_ROOT_DIR}/Thirdparty/g2o/lib NO_DEFAULT_PATH)
+
+# Sophus (builtin) -- note lowercase 'sophus'
+find_path(Sophus_INCLUDE_DIR NAMES sophus/se3.hpp
+          PATHS ${ORB_SLAM3_ROOT_DIR}/Thirdparty/Sophus NO_DEFAULT_PATH)
+
+# CameraModels directory (some headers live there, e.g. GeometricCamera.h)
+set(ORB_SLAM3_CAMERAMODELS_DIR "${ORB_SLAM3_ROOT_DIR}/include/CameraModels")
+
+# Build the aggregated include & library variables
+set(ORB_SLAM3_INCLUDE_DIRS "")
+if(ORB_SLAM3_INCLUDE_DIR)
+  list(APPEND ORB_SLAM3_INCLUDE_DIRS ${ORB_SLAM3_INCLUDE_DIR})
+endif()
+if(DBoW2_INCLUDE_DIR)
+  list(APPEND ORB_SLAM3_INCLUDE_DIRS ${DBoW2_INCLUDE_DIR})
+endif()
+if(Sophus_INCLUDE_DIR)
+  list(APPEND ORB_SLAM3_INCLUDE_DIRS ${Sophus_INCLUDE_DIR})
+endif()
+if(EXISTS "${ORB_SLAM3_CAMERAMODELS_DIR}")
+  list(APPEND ORB_SLAM3_INCLUDE_DIRS ${ORB_SLAM3_CAMERAMODELS_DIR})
+endif()
+
+set(ORB_SLAM3_LIBRARIES "")
+if(ORB_SLAM3_LIBRARY)
+  list(APPEND ORB_SLAM3_LIBRARIES ${ORB_SLAM3_LIBRARY})
+endif()
+if(DBoW2_LIBRARY)
+  list(APPEND ORB_SLAM3_LIBRARIES ${DBoW2_LIBRARY})
+endif()
+if(g2o_LIBRARY)
+  list(APPEND ORB_SLAM3_LIBRARIES ${g2o_LIBRARY})
+endif()
+
+# Standard CMake result handling
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(ORB_SLAM3 DEFAULT_MSG
+                                  ORB_SLAM3_LIBRARY ORB_SLAM3_INCLUDE_DIR
+                                  DBoW2_INCLUDE_DIR DBoW2_LIBRARY g2o_LIBRARY Sophus_INCLUDE_DIR)
+
+mark_as_advanced(ORB_SLAM3_INCLUDE_DIR ORB_SLAM3_LIBRARY DBoW2_INCLUDE_DIR DBoW2_LIBRARY g2o_LIBRARY Sophus_INCLUDE_DIR)
+```
+5、其余因为新版本弃用老版本的写法产生的问题  
+ROS2 Jazzy 下的 cv_bridge 头文件从 cv_bridge.h 改成了 cv_bridge.hpp，所以我们需要修改 ORB_SLAM3_ROS2 的源码，把所有的#include <cv_bridge/cv_bridge.h>改为#include <cv_bridge/cv_bridge.hpp>。在 ORB_SLAM3_ROS2 源码目录下用 sed 批量替换：
+```
+cd ~/colcon_ws/src/ORB_SLAM3_ROS2-main
+
+# 批量替换所有 .cpp 和 .hpp 文件中的 cv_bridge.h 为 cv_bridge.hpp
+grep -rl "cv_bridge/cv_bridge.h" ./src | xargs sed -i 's#cv_bridge/cv_bridge.h#cv_bridge/cv_bridge.hpp#g'
+```
+grep -rl → 递归查找包含目标字符串的文件  
+xargs sed -i → 直接在原文件中替换  
+替换完成后，检查是否有残留  
+```
+grep -R "cv_bridge/cv_bridge.h" ./src
+```
+如果没有输出，则代表替换完成  
+6、编译  
+```
+cd ~/colcon_ws
+colcon build --symlink-install --packages-select orbslam3
+```
+### 用自己相机运行ORB_SLAM3_ROS2  
+以RGB-D为例  
+修改/home/myuser/colcon_ws/src/ORB_SLAM3_ROS2-main/src/rgbd/rgbd-slam-node.cpp得到代码，把接收的topic换成自己相机发布的topic  
+<img width="1526" height="459" alt="image" src="https://github.com/user-attachments/assets/168d9a3d-5cd8-4437-8b70-77223798d069" />  
+**注意：** 直接运行会出现double free or corruption (out)的错误，这是典型的 C++ 内存管理问题。需要将接收topic的那两行代码也改成图上所示。  
+```
+#原版代码
+rgb_sub = std：：make_shared<message_filters：：Subscriber<ImageMsg> >（shared_ptr<rclcpp：：Node>（this）， “camera/rgb”); 
+depth_sub = std：：make_shared<message_filters：：Subscriber<ImageMsg> >（shared_ptr<rclcpp：：Node>（this）， “camera/depth”);
+
+#正确代码
+rgb_sub = std::make_shared< message_filters::Subscriber<ImageMsg> >(this, "camera/rgb");
+depth_sub = std::make_shared< message_filters::Subscriber<ImageMsg> >(this, "camera/depth");
+```
+修改后要重新编译文件  
+```
+cd ~/colcon_ws
+colcon build --symlink-install --packages-select orbslam3
+```
+运行程序  
+```
+ros2 run orbslam3 rgbd /home/myuser/ORB_SLAM3/Vocabulary/ORBvoc.txt /home/myuser/ORB_SLAM3/Examples/RGB-D/TUM1.yaml
+```
+保存或加载.osa文件同上面的ORB_SLAM3，可以直接用ORB_SLAM3中的相机参数的.yaml文件  
+### 保存点云，导出.ply文件  
+在 ORB_SLAM3 源码中 System.cc / System.h 里加一个导出点云的方法，然后在 monocular-slam-node.cpp 中调用它  
+1、在 ~/ORB_SLAM3/include/System.h 添加函数声明  
+```
+void SaveMapPointCloud(const std::string &filename);
+```
+2、在 ~/ORB_SLAM3/src/System.cc 实现点云导出  
+```
+#include <fstream>
+#include <iomanip>
+#include "MapPoint.h"
+
+void ORB_SLAM3::System::SaveMapPointCloud(const std::string &filename)
+{
+    std::cout << "Saving map points to: " << filename << std::endl;
+
+    // 获取Atlas中的所有地图
+    std::vector<ORB_SLAM3::Map*> maps = mpAtlas->GetAllMaps();
+
+    std::ofstream ofs(filename);
+    ofs << "ply" << std::endl;
+    ofs << "format ascii 1.0" << std::endl;
+
+    // 统计所有地图点数量
+    size_t total_points = 0;
+    for(auto pMap : maps)
+    {
+        total_points += pMap->GetAllMapPoints().size();
+    }
+    ofs << "element vertex " << total_points << std::endl;
+    ofs << "property float x" << std::endl;
+    ofs << "property float y" << std::endl;
+    ofs << "property float z" << std::endl;
+    ofs << "end_header" << std::endl;
+
+    // 遍历所有地图点
+    for(auto pMap : maps)
+    {
+        std::vector<ORB_SLAM3::MapPoint*> mapPoints = pMap->GetAllMapPoints();
+        for(auto pMP : mapPoints)
+        {
+            if(!pMP || pMP->isBad()) continue;
+            Eigen::Vector3f eigPos = pMP->GetWorldPos();
+            cv::Mat pos = (cv::Mat_<float>(3,1) << eigPos[0], eigPos[1], eigPos[2]);
+
+            ofs << std::fixed << std::setprecision(6)
+                << pos.at<float>(0) << " "
+                << pos.at<float>(1) << " "
+                << pos.at<float>(2) << std::endl;
+        }
+    }
+    ofs.close();
+    std::cout << "Map points saved: " << total_points << " points." << std::endl;
+}
+```
+3、在rgbd-slam-node.cpp中调用  
+<img width="1005" height="204" alt="image" src="https://github.com/user-attachments/assets/87b3ef0a-a2f5-4485-a329-99f89d49f13d" />  
+4、重新编译ORB_SLAM3和ORB_SLAM3_ROS2  
+
