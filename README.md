@@ -496,4 +496,35 @@ void ORB_SLAM3::System::SaveMapPointCloud(const std::string &filename)
 3、在rgbd-slam-node.cpp中调用  
 <img width="1005" height="204" alt="image" src="https://github.com/user-attachments/assets/87b3ef0a-a2f5-4485-a329-99f89d49f13d" />  
 4、重新编译ORB_SLAM3和ORB_SLAM3_ROS2  
+### 实时打印相机位姿  
+修改rgbd-slam-node.cpp中的void RgbdSlamNode::GrabRGBD，直接将原文件中的void RgbdSlamNode::GrabRGBD内容替换  
+```
+void RgbdSlamNode::GrabRGBD(const ImageMsg::SharedPtr msgRGB, const ImageMsg::SharedPtr msgD)
+{
+    try
+    {
+        cv_ptrRGB = cv_bridge::toCvShare(msgRGB);
+        cv_ptrD   = cv_bridge::toCvShare(msgD);
+    }
+    catch (cv_bridge::Exception& e)
+    {
+        RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s", e.what());
+        return;
+    }
 
+    // 调用 SLAM 获取位姿
+    Sophus::SE3f Tcw = m_SLAM->TrackRGBD(cv_ptrRGB->image, cv_ptrD->image, Utility::StampToSec(msgRGB->header.stamp));
+
+    // 提取平移和旋转（四元数）
+    Eigen::Vector3f t(Tcw.translation());
+    Eigen::Quaternionf q(Tcw.rotationMatrix());
+
+    // 输出格式与单目完全一致，保留3位小数
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "[Camera Pose] t = ["
+              << t(0) << ", " << t(1) << ", " << t(2) << "] "
+              << "q = ["
+              << q.w() << ", " << q.x() << ", " << q.y() << ", " << q.z() << "]"
+              << std::endl;
+}
+```
